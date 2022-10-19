@@ -1,5 +1,5 @@
-# crs-queue
-`crs-queue` is a simple coalescing, rate-limited, serializable/deserializable task queue for Node and Deno which is designed for issuing requests to a rate-limited endpoint from a host program that is transient (as opposed to long-running).
+# crs_queue
+`crs_queue` is a simple coalescing, rate-limited, serializable/deserializable task queue for Node and Deno which is designed for issuing requests to a rate-limited endpoint from a host program that is transient (as opposed to long-running).
 
 ## Features
 

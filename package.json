@@ -1,5 +1,5 @@
 {
-  "name": "crs-queue",
+  "name": "crs_queue",
   "version": "1.0.0",
   "description": "Coalescing, rate-limited, serializable/deserializable task queue",
   "main": "dist/mod.js",
@@ -10,9 +10,9 @@
     "build": "tsc",
     "test": "deno test ."
   },
-  "homepage": "https://github.com/jaredkrinke/crs-queue",
+  "homepage": "https://github.com/jaredkrinke/crs_queue",
   "repository": {
-    "url": "https://github.com/jaredkrinke/crs-queue"
+    "url": "https://github.com/jaredkrinke/crs_queue"
   },
   "license": "MIT-0"
 }
