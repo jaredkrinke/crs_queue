@@ -3,11 +3,19 @@ import { RateLimiter, TaskBase, TaskManager } from "./mod.ts";
 
 function wait(ms: number): Promise<void> {
     return new Promise<void>(resolve => setTimeout(() => resolve(), ms));
-    
 }
 
+function later(now: Date, delayMS: number): Date {
+    return new Date(now.valueOf() + delayMS);
+}
+
+// Mock "new Date()"
+let now = new Date();
+RateLimiter["getNow"] = () => now;
+TaskManager["getNow"] = () => now;
+
 Deno.test({
-    name: "RateLimiter serialization",
+    name: "RateLimiter property serialization",
     fn: () => {
         const rl = new RateLimiter({ count: 5, periodMS: 100});
         const rl2 = RateLimiter.deserialize(rl.serialize());
@@ -21,33 +29,44 @@ Deno.test({
         let rl = new RateLimiter({ count: 5, periodMS: 100});
 
         // Five requests should be allowed
-        const now = new Date();
-        assertEquals(rl.tryRequest(now), true);
-        assertEquals(rl.tryRequest(new Date(now.valueOf() + 5)), true);
-        assertEquals(rl.tryRequest(new Date(now.valueOf() + 10)), true);
-        assertEquals(rl.tryRequest(new Date(now.valueOf() + 15)), true);
-        assertEquals(rl.tryRequest(new Date(now.valueOf() + 20)), true);
+        const originalNow = now;
+        RateLimiter["getNow"] = () => now;
+        assertEquals(rl.tryRequest(), true);
+        now = later(now, 5);
+        assertEquals(rl.tryRequest(), true);
+        now = later(now, 5);
+        assertEquals(rl.tryRequest(), true);
+        now = later(now, 5);
+        assertEquals(rl.tryRequest(), true);
+        now = later(now, 5);
+        assertEquals(rl.tryRequest(), true);
 
         // No more should be allowed
         for (let i = 0; i < 3; i++) {
-            assert(rl.tryRequest(new Date(now.valueOf() + 20)) instanceof Date);
+            assert(rl.tryRequest() instanceof Date);
         }
 
-        const later = new Date(now.valueOf() + 100 + 1); // +1 to ensure we're past the window
-        assertEquals(rl.tryRequest(later), true);
+        now = later(originalNow, 100 + 1); // +1 to ensure we're past the window
+        assertEquals(rl.tryRequest(), true);
 
         // Round-trip through JSON part way through
         rl = RateLimiter.deserialize(rl.serialize());
 
-        assert(rl.tryRequest(new Date(later.valueOf() + 4)) instanceof Date);
-        assertEquals(rl.tryRequest(new Date(later.valueOf() + 5)), true);
+        now = later(now, 4);
+        assert(rl.tryRequest() instanceof Date);
+        now = later(now, 1);
+        assertEquals(rl.tryRequest(), true);
 
-        assertEquals(rl.tryRequest(new Date(later.valueOf() + 10)), true);
-        assertEquals(rl.tryRequest(new Date(later.valueOf() + 15)), true);
-        assertEquals(rl.tryRequest(new Date(later.valueOf() + 20)), true);
+        now = later(now, 5);
+        assertEquals(rl.tryRequest(), true);
+        now = later(now, 5);
+        assertEquals(rl.tryRequest(), true);
+        now = later(now, 5);
+        assertEquals(rl.tryRequest(), true);
 
+        now = later(now, 1);
         for (let i = 0; i < 3; i++) {
-            assert(rl.tryRequest(new Date(later.valueOf() + 21)) instanceof Date);
+            assert(rl.tryRequest() instanceof Date);
         }
     },
 });
@@ -64,19 +83,18 @@ Deno.test({
 
         let tm = new TaskManager<TaskBase, string>({ rateLimit, onRunTask });
 
-        function runTask(s: string, time: Date) {
+        function runTask(s: string) {
             const t = { id: s};
             outstandingTasks.push(t);
-            return tm.run(t, time);
+            return tm.run(t);
         }
 
-        const now = new Date();
-        tm.start(now);
-        runTask("a", now);
-        runTask("b", now);
-        const promiseC = runTask("c", now);
-        assertEquals(runTask("d", now), null);
-        runTask("e", now);
+        tm.start();
+        runTask("a");
+        runTask("b");
+        const promiseC = runTask("c");
+        assertEquals(runTask("d"), null);
+        runTask("e");
 
         // a, b, c should have run
         assertEquals(outstandingTasks.length, 2);
@@ -87,7 +105,7 @@ Deno.test({
         assertEquals(await promiseC, "c");
         tm.stop();
         tm = TaskManager.deserialize<TaskBase, string>(tm.serialize(), { onRunTask });
-        tm.start(now);
+        tm.start();
 
         assertEquals(outstandingTasks.length, 2);
         assertEquals(outstandingTasks.findIndex(t => t.id === "d"), 0);
@@ -95,8 +113,8 @@ Deno.test({
 
         // Advance time
         tm.stop();
-        const later = new Date(now.valueOf() + 1000 + 1);
-        tm.start(later);
+        now = later(now, 1000 + 1);
+        tm.start();
 
         // All should be done
         assertEquals(outstandingTasks.length, 0);
@@ -117,12 +135,11 @@ Deno.test({
             onRunTask,
         });
 
-        const now = new Date();
-        tm.start(now);
-        const p = tm.run({ id: "c" }, now); // One to fill up the rate limit
-        tm.run({ id: "a" }, now);
-        tm.run({ id: "a" }, now); // Duplicate; should be coalesced
-        tm.run({ id: "b" }, now);
+        tm.start();
+        const p = tm.run({ id: "c" }); // One to fill up the rate limit
+        tm.run({ id: "a" });
+        tm.run({ id: "a" }); // Duplicate; should be coalesced
+        tm.run({ id: "b" });
         assertEquals(runCount, 1);
 
         // Need to let task completion handlers run
@@ -135,7 +152,8 @@ Deno.test({
             onRunTask,
         });
 
-        tm.start(new Date(now.valueOf() + 5000));
+        now = later(now, 5000);
+        tm.start();
         assertEquals(runCount, 3);
     },
 });

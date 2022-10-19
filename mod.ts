@@ -17,11 +17,10 @@ interface RateLimiterJsonResult {
     history: string[];
 }
 
-// TODO: Replace with "satisfies" once that's supported...
-function identity<T>(o: T): T { return o; }
-
 /** Limits the number of requests to no more than the given rate. */
 export class RateLimiter {
+    private static getNow = () => new Date();
+
     private readonly history: Date[];
     private rate: RateLimit;
 
@@ -51,11 +50,11 @@ export class RateLimiter {
         this.history.push(now);
     }
 
-    /** Attempts to initiate a request. Returns true if the request is allowed; otherwise returns the time in the future at which *any* request would be allowed.
-     * 
-     * Note: The reference time defaults to the current time, but this can be overridden. Take care to ensure that the times supplied are monotonically increasing.
+    /** Attempts to initiate a request. Returns true if the request is allowed; otherwise returns the time in the
+     * future at which *any* request would be allowed.
      */
-    public tryRequest(now = new Date()): boolean | Date {
+    public tryRequest(): boolean | Date {
+        const now = RateLimiter.getNow();
         this.update(now);
         if (this.history.length < this.rate.count) {
             this.addRequest(now);
@@ -77,10 +76,13 @@ export class RateLimiter {
 
     /** Serializes the RateLimiter to a JSON string. */
     public serialize(): string {
-        return JSON.stringify(identity<RateLimiterJsonSource>({
+        this.update(RateLimiter.getNow());
+        const json: RateLimiterJsonSource = {
             rate: this.rate,
             history: this.history,
-        }));
+        };
+
+        return JSON.stringify(json);
     }
 }
 
@@ -128,6 +130,8 @@ type TaskManagerJson<TTask extends { id: string }> = {
 
 /** A coalescing, rate-limited, serializable/deserializable task manager. */
 export class TaskManager<TTask extends TaskBase, TResult> {
+    private static getNow = () => new Date();
+
     // Persistent state
     private limiter: RateLimiter;
     private onRunTask: (task: TTask) => Promise<TResult>;
@@ -183,7 +187,7 @@ export class TaskManager<TTask extends TaskBase, TResult> {
         });
     }
 
-    private drain(triggeringTask?: TTask, now = new Date()): Promise<TResult> | null {
+    private drain(now: Date, triggeringTask?: TTask): Promise<TResult> | null {
         if (this.stopped) {
             throw new Error("Attempted to run TaskManager while it was stopped!");
         }
@@ -195,7 +199,7 @@ export class TaskManager<TTask extends TaskBase, TResult> {
 
         let promiseOrNull: Promise<TResult> | null = null;
         while (this.queue.length > 0) {
-            const result = this.limiter.tryRequest(now);
+            const result = this.limiter.tryRequest();
             if (result === true) {
                 // Under the rate limit; run the task
                 const task = this.queue.shift()!;
@@ -226,7 +230,7 @@ export class TaskManager<TTask extends TaskBase, TResult> {
                 const nextRunTime = result as Date;
                 this.callbackToken = setTimeout(() => {
                     this.callbackToken = undefined;
-                    this.drain();
+                    this.drain(TaskManager.getNow());
                 }, nextRunTime.valueOf() - now.valueOf());
                 break;
             }
@@ -240,15 +244,17 @@ export class TaskManager<TTask extends TaskBase, TResult> {
     }
 
     /** Starts executing tasks. */
-    public start(now = new Date()): void {
+    public start(): void {
+        const now = TaskManager.getNow();
         this.stopped = false;
-        this.drain(undefined, now);
+        this.drain(now);
     }
 
     /** Adds (and attempts to run, if possible) a task. */
-    public run(task: TTask, now = new Date()): Promise<TResult> | null {
+    public run(task: TTask): Promise<TResult> | null {
+        const now = TaskManager.getNow();
         this.insertOrReplaceTask(task, true);
-        return this.drain(task, now);
+        return this.drain(now, task);
     }
 
     /** Stops task processing. Note that any in-progress tasks cannot be canceled/stopped; this function only affects
@@ -269,9 +275,11 @@ export class TaskManager<TTask extends TaskBase, TResult> {
             TaskManager.insertOrReplaceTaskInto<TTask>(queue, task, false);
         }
 
-        return JSON.stringify(identity<TaskManagerJson<TTask>>({
+        const json: TaskManagerJson<TTask> = {
             limiterJson: this.limiter.serialize(),
             queue,
-        }));
+        }
+
+        return JSON.stringify(json);
     }
 }
