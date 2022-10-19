@@ -84,15 +84,38 @@ export class RateLimiter {
     }
 }
 
+/** Base type for tasks. */
+export type TaskBase = {
+    /** Identity of the task. Tasks with the same `id` property will be coalesced. */
+    id: string,
+};
 
-export type TaskBase = { id: string };
-
+/** Options for creating TaskManager. */
 export type TaskManagerOptions<TTask extends TaskBase> = {
+    /** Rate limit for running tasks. */
     rateLimit: RateLimit;
+
+    /** Callback for running the given task. */
     onRunTask: (task: TTask) => Promise<void>;
+
+    /** Callback for handling failure of the given task (e.g. to schedule retries). */
     onTaskFailure?: (task: TTask) => void;
 }
 
+/** Options for deserializing a TaskManager. */
+export type TaskManagerDeserializeOptions<TTask extends TaskBase> = {
+    /** (Optional) New rate limit to apply (this overrides the serialized rate limit). This is useful if the rate limit
+     * needs to be changed but the task manager was serialized with an old rate limit. */
+    rateLimit?: RateLimit;
+
+    /** Callback for running the given task. */
+    onRunTask: (task: TTask) => Promise<void>;
+
+    /** Callback for handling failure of the given task (e.g. to schedule retries). */
+    onTaskFailure?: (task: TTask) => void;
+}
+
+/** State for a TaskManager (used for deserializing a TaskManager). */
 export type TaskManagerState<TTask extends TaskBase> = {
     rateLimiter: RateLimiter;
     queue: TTask[];
@@ -116,6 +139,7 @@ export class TaskManager<TTask extends TaskBase> {
     private running: TTask[];
     private callbackToken?: number;
 
+    /** Creates a new TaskManager with the given options (and optional state). */
     constructor(options: TaskManagerOptions<TTask>, state?: TaskManagerState<TTask>) {
         if (state?.rateLimiter) {
             this.limiter = state.rateLimiter;
@@ -133,13 +157,26 @@ export class TaskManager<TTask extends TaskBase> {
         this.running = [];
     }
 
-    public static deserialize<TTask extends TaskBase>(json: string, onRunTask: (task: TTask) => Promise<void>, onTaskFailure?: (task: TTask) => void, newRateLimit?: RateLimit): TaskManager<TTask> {
+    private static insertOrReplaceTaskInto<TTask extends TaskBase>(queue: TTask[], task: TTask, replace: boolean): void {
+        const existingIndex = queue.findIndex(t => t.id === task.id);
+        if (existingIndex >= 0) {
+            // Task with same id already exists in queue; replace or drop as requested
+            if (replace) {
+                queue.splice(existingIndex, 1, task);
+            }
+        } else {
+            queue.push(task);
+        }
+    }
+
+    /** Deserializes a TaskManager from a JSON string, using the given options. */
+    public static deserialize<TTask extends TaskBase>(json: string, options: TaskManagerDeserializeOptions<TTask>): TaskManager<TTask> {
         const o = JSON.parse(json) as TaskManagerJson<TTask>;
         const rateLimiter = RateLimiter.deserialize(o.limiterJson);
         return new TaskManager<TTask>({
-            rateLimit: newRateLimit ?? rateLimiter.getRateLimit(),
-            onRunTask,
-            onTaskFailure,
+            rateLimit: options.rateLimit ?? rateLimiter.getRateLimit(),
+            onRunTask: options.onRunTask,
+            onTaskFailure: options.onTaskFailure,
         }, {
             rateLimiter,
             queue: o.queue,
@@ -189,26 +226,24 @@ export class TaskManager<TTask extends TaskBase> {
         }
     }
 
-    private insertOrReplaceTask(task: TTask, replace: boolean) {
-        const existingIndex = this.queue.findIndex(t => t.id === task.id);
-        if (existingIndex >= 0) {
-            // Task with same id already exists in queue; replace or drop as requested
-            if (replace) {
-                this.queue.splice(existingIndex, 1, task);
-            }
-        }
+    private insertOrReplaceTask(task: TTask, replace: boolean): void {
+        TaskManager.insertOrReplaceTaskInto<TTask>(this.queue, task, replace);
     }
 
+    /** Starts executing tasks. */
     public start(now = new Date()): void {
         this.stopped = false;
         this.drain(now);
     }
 
+    /** Adds (and attempts to run, if possible) a task. */
     public run(task: TTask, now = new Date()): void {
         this.insertOrReplaceTask(task, true);
         this.drain(now);
     }
 
+    /** Stops task processing. Note that any in-progress tasks cannot be canceled/stopped; this function only affects
+     * queued tasks. */
     public stop(): void {
         this.stopped = true;
         if (this.callbackToken) {
@@ -217,17 +252,17 @@ export class TaskManager<TTask extends TaskBase> {
         }
     }
 
+    /** Serializes a TaskManager and its queued/running tasks to a JSON string. */
     public serialize(): string {
-        this.stop();
-
-        // Add running tasks back to the queue (dropping any that are already in the queue, since the ones in the queue are newer)
+        // Merge running and queued tasks for serialization with queued tasks taking precedence (since they're newer)
+        const queue = this.queue.slice();
         for (const task of this.running) {
-            this.insertOrReplaceTask(task, false);
+            TaskManager.insertOrReplaceTaskInto<TTask>(queue, task, false);
         }
 
         return JSON.stringify(identity<TaskManagerJson<TTask>>({
             limiterJson: this.limiter.serialize(),
-            queue: this.queue,
+            queue,
         }));
     }
 }
