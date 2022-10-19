@@ -37,10 +37,10 @@ The task queue is encapsulated in the `TaskManager<TTask extends TaskBase, TResu
 
 Here's a brief description of the class's methods:
 
-* `start(): void`: Starts task processing
 * `run(task: TTask): Promise<TResult> | null`: Enqueues the provided task (coalescing, if applicable); if run immediately, the running task's promise (from `onRunTask` above) is returned (otherwise null is returned)
 * `stop(): void`: Halts task processing (note that in-flight tasks *will not* be canceled/stopped)
-* `serialize(): string`: Serializes the task queue to string
+* `start(): void`: Starts task processing, if it had been previously stopped
+* `serialize(): string`: Serializes the task queue to a string
 
 Deserialization is done using:
 
