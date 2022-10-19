@@ -133,10 +133,10 @@ export class TaskManager<TTask extends TaskBase, TResult> {
     private static getNow = () => new Date();
 
     // Persistent state
-    private limiter: RateLimiter;
-    private onRunTask: (task: TTask) => Promise<TResult>;
-    private onTaskFailure?: (task: TTask) => void;
-    private queue: TTask[];
+    private readonly limiter: RateLimiter;
+    private readonly onRunTask: (task: TTask) => Promise<TResult>;
+    private readonly onTaskFailure?: (task: TTask) => void;
+    private readonly queue: TTask[];
 
     // Transient state
     private stopped: boolean;
