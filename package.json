@@ -1,6 +1,6 @@
 {
   "name": "crs_queue",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "description": "Coalescing, rate-limited, serializable/deserializable task queue",
   "main": "dist/mod.js",
   "files": [
