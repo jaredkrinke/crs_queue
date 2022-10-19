@@ -126,7 +126,7 @@ type TaskManagerJson<TTask extends { id: string }> = {
     queue: TTask[];
 };
 
-/** A rate-limited, coalescing, serializable/deserializable task manager. */
+/** A coalescing, rate-limited, serializable/deserializable task manager. */
 export class TaskManager<TTask extends TaskBase> {
     // Persistent state
     private limiter: RateLimiter;
