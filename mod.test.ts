@@ -89,7 +89,6 @@ Deno.test({
             return tm.run(t);
         }
 
-        tm.start();
         runTask("a");
         runTask("b");
         const promiseC = runTask("c");
@@ -135,7 +134,6 @@ Deno.test({
             onRunTask,
         });
 
-        tm.start();
         const p = tm.run({ id: "c" }); // One to fill up the rate limit
         tm.run({ id: "a" });
         tm.run({ id: "a" }); // Duplicate; should be coalesced
@@ -169,7 +167,6 @@ Deno.test({
             onTaskFailure: () => { failed = true; },
         });
 
-        tm.start();
         tm.run({ id: "a" });
         await assertRejects(() => promise);
         assertEquals(failed, true);
@@ -199,7 +196,6 @@ Deno.test({
             onRunTask,
         });
 
-        tm.start();
         tm.run({ id: "a" });
         assertEquals(startCount, 1);
         assertEquals(endCount, 0);

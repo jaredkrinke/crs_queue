@@ -157,7 +157,7 @@ export class TaskManager<TTask extends TaskBase, TResult> {
         this.onRunTask = options.onRunTask;
         this.onTaskFailure = options.onTaskFailure;
         this.queue = (state?.queue) ?? [];
-        this.stopped = true;
+        this.stopped = false;
         this.running = [];
     }
 
