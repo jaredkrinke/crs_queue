@@ -27,18 +27,18 @@ Example:
 ### TaskManager
 This section is just a quick summary. Refer to JSDoc comments for more detail.
 
-The task queue is encapsulated in the `TaskManager<TTask extends TaskBase>` class. The class constructor takes `options` object with the following properties:
+The task queue is encapsulated in the `TaskManager<TTask extends TaskBase, TResult>` class. The class constructor takes `options` object with the following properties:
 
 * `rateLimit` (`{ count: number, periodMS: number}`):
   * count: Maximum number of tasks to process during the period
   * periodMS: Length of the period in milliseconds
-* `onRunTask` (`(task: TTask) => Promise<void>`): Async callback for processing a task
+* `onRunTask` (`(task: TTask) => Promise<TResult>`): Async callback for processing a task
 * `onTaskFailure` (`(task: TTask) => void | undefined`): Optional task failure handler (e.g. to re-enqueue the task)
 
 Here's a brief description of the class's methods:
 
 * `start(): void`: Starts task processing
-* `run(task: TTask): void`: Enqueues the provided task (coalescing, if applicable)
+* `run(task: TTask): Promise<TResult> | null`: Enqueues the provided task (coalescing, if applicable); if run immediately, the running task's promise (from `onRunTask` above) is returned (otherwise null is returned)
 * `stop(): void`: Halts task processing (note that in-flight tasks *will not* be canceled/stopped)
 * `serialize(): string`: Serializes the task queue to string
 

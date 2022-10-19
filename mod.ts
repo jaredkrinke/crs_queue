@@ -91,25 +91,25 @@ export type TaskBase = {
 };
 
 /** Options for creating TaskManager. */
-export type TaskManagerOptions<TTask extends TaskBase> = {
+export type TaskManagerOptions<TTask extends TaskBase, TResult> = {
     /** Rate limit for running tasks. */
     rateLimit: RateLimit;
 
     /** Callback for running the given task. */
-    onRunTask: (task: TTask) => Promise<void>;
+    onRunTask: (task: TTask) => Promise<TResult>;
 
     /** Callback for handling failure of the given task (e.g. to schedule retries). */
     onTaskFailure?: (task: TTask) => void;
 }
 
 /** Options for deserializing a TaskManager. */
-export type TaskManagerDeserializeOptions<TTask extends TaskBase> = {
+export type TaskManagerDeserializeOptions<TTask extends TaskBase, TResult> = {
     /** (Optional) New rate limit to apply (this overrides the serialized rate limit). This is useful if the rate limit
      * needs to be changed but the task manager was serialized with an old rate limit. */
     rateLimit?: RateLimit;
 
     /** Callback for running the given task. */
-    onRunTask: (task: TTask) => Promise<void>;
+    onRunTask: (task: TTask) => Promise<TResult>;
 
     /** Callback for handling failure of the given task (e.g. to schedule retries). */
     onTaskFailure?: (task: TTask) => void;
@@ -127,10 +127,10 @@ type TaskManagerJson<TTask extends { id: string }> = {
 };
 
 /** A coalescing, rate-limited, serializable/deserializable task manager. */
-export class TaskManager<TTask extends TaskBase> {
+export class TaskManager<TTask extends TaskBase, TResult> {
     // Persistent state
     private limiter: RateLimiter;
-    private onRunTask: (task: TTask) => Promise<void>;
+    private onRunTask: (task: TTask) => Promise<TResult>;
     private onTaskFailure?: (task: TTask) => void;
     private queue: TTask[];
 
@@ -140,7 +140,7 @@ export class TaskManager<TTask extends TaskBase> {
     private callbackToken?: number;
 
     /** Creates a new TaskManager with the given options (and optional state). */
-    constructor(options: TaskManagerOptions<TTask>, state?: TaskManagerState<TTask>) {
+    constructor(options: TaskManagerOptions<TTask, TResult>, state?: TaskManagerState<TTask>) {
         if (state?.rateLimiter) {
             this.limiter = state.rateLimiter;
 
@@ -170,10 +170,10 @@ export class TaskManager<TTask extends TaskBase> {
     }
 
     /** Deserializes a TaskManager from a JSON string, using the given options. */
-    public static deserialize<TTask extends TaskBase>(json: string, options: TaskManagerDeserializeOptions<TTask>): TaskManager<TTask> {
+    public static deserialize<TTask extends TaskBase, TResult>(json: string, options: TaskManagerDeserializeOptions<TTask, TResult>): TaskManager<TTask, TResult> {
         const o = JSON.parse(json) as TaskManagerJson<TTask>;
         const rateLimiter = RateLimiter.deserialize(o.limiterJson);
-        return new TaskManager<TTask>({
+        return new TaskManager<TTask, TResult>({
             rateLimit: options.rateLimit ?? rateLimiter.getRateLimit(),
             onRunTask: options.onRunTask,
             onTaskFailure: options.onTaskFailure,
@@ -183,16 +183,17 @@ export class TaskManager<TTask extends TaskBase> {
         });
     }
 
-    private drain(now = new Date()): void {
+    private drain(triggeringTask?: TTask, now = new Date()): Promise<TResult> | null {
         if (this.stopped) {
             throw new Error("Attempted to run TaskManager while it was stopped!");
         }
 
         if (this.callbackToken !== undefined) {
             // Timer is already scheduled
-            return;
+            return null;
         }
 
+        let promiseOrNull: Promise<TResult> | null = null;
         while (this.queue.length > 0) {
             const result = this.limiter.tryRequest(now);
             if (result === true) {
@@ -200,7 +201,8 @@ export class TaskManager<TTask extends TaskBase> {
                 const task = this.queue.shift()!;
                 this.running.push(task);
 
-                this.onRunTask(task).then(() => {
+                const promise = this.onRunTask(task);
+                promise.then(() => {
                     // Task completed
                     if (!this.stopped) {
                         this.running.splice(this.running.indexOf(task), 1);
@@ -214,6 +216,11 @@ export class TaskManager<TTask extends TaskBase> {
                         }
                     }
                 });
+
+                // Check to see if this was the triggering task; if so, this promise should be returned
+                if (task.id === triggeringTask?.id) {
+                    promiseOrNull = promise;
+                }
             } else {
                 // Over the rate limit; schedule a timer
                 const nextRunTime = result as Date;
@@ -224,6 +231,8 @@ export class TaskManager<TTask extends TaskBase> {
                 break;
             }
         }
+
+        return promiseOrNull;
     }
 
     private insertOrReplaceTask(task: TTask, replace: boolean): void {
@@ -233,13 +242,13 @@ export class TaskManager<TTask extends TaskBase> {
     /** Starts executing tasks. */
     public start(now = new Date()): void {
         this.stopped = false;
-        this.drain(now);
+        this.drain(undefined, now);
     }
 
     /** Adds (and attempts to run, if possible) a task. */
-    public run(task: TTask, now = new Date()): void {
+    public run(task: TTask, now = new Date()): Promise<TResult> | null {
         this.insertOrReplaceTask(task, true);
-        this.drain(now);
+        return this.drain(task, now);
     }
 
     /** Stops task processing. Note that any in-progress tasks cannot be canceled/stopped; this function only affects

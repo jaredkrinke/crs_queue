@@ -59,23 +59,23 @@ Deno.test({
         const rateLimit = { count: 3, periodMS: 1000 };
         const onRunTask = (t: TaskBase) => {
             outstandingTasks.splice(outstandingTasks.indexOf(t), 1);
-            return Promise.resolve();
+            return Promise.resolve(t.id);
         };
 
-        let tm = new TaskManager<TaskBase>({ rateLimit, onRunTask });
+        let tm = new TaskManager<TaskBase, string>({ rateLimit, onRunTask });
 
         function runTask(s: string, time: Date) {
             const t = { id: s};
             outstandingTasks.push(t);
-            tm.run(t, time);
+            return tm.run(t, time);
         }
 
         const now = new Date();
         tm.start(now);
         runTask("a", now);
         runTask("b", now);
-        runTask("c", now);
-        runTask("d", now);
+        const promiseC = runTask("c", now);
+        assertEquals(runTask("d", now), null);
         runTask("e", now);
 
         // a, b, c should have run
@@ -84,9 +84,9 @@ Deno.test({
         assertEquals(outstandingTasks.findIndex(t => t.id === "e"), 1);
 
         // Round-trip through JSON
-        await wait(1);
+        assertEquals(await promiseC, "c");
         tm.stop();
-        tm = TaskManager.deserialize<TaskBase>(tm.serialize(), { onRunTask });
+        tm = TaskManager.deserialize<TaskBase, string>(tm.serialize(), { onRunTask });
         tm.start(now);
 
         assertEquals(outstandingTasks.length, 2);
@@ -112,25 +112,25 @@ Deno.test({
             return Promise.resolve();
         };
 
-        let tm = new TaskManager<TaskBase>({
+        let tm = new TaskManager<TaskBase, void>({
             rateLimit: { count: 1, periodMS: 1000 },
             onRunTask,
         });
 
         const now = new Date();
         tm.start(now);
-        tm.run({ id: "c" }, now); // One to fill up the rate limit
+        const p = tm.run({ id: "c" }, now); // One to fill up the rate limit
         tm.run({ id: "a" }, now);
         tm.run({ id: "a" }, now); // Duplicate; should be coalesced
         tm.run({ id: "b" }, now);
         assertEquals(runCount, 1);
 
         // Need to let task completion handlers run
-        await wait(1);
+        await p;
 
         // Override the rate limit
         tm.stop();
-        tm = TaskManager.deserialize<TaskBase>(tm.serialize(), {
+        tm = TaskManager.deserialize<TaskBase, void>(tm.serialize(), {
             rateLimit: { count: 5, periodMS: 1000 },
             onRunTask,
         });
@@ -145,7 +145,7 @@ Deno.test({
     fn: async () => {
         let failed = false;
         const promise = Promise.reject();
-        const tm = new TaskManager<TaskBase>({
+        const tm = new TaskManager<TaskBase, void>({
             rateLimit: { count: 10, periodMS: 1000 },
             onRunTask: () => promise,
             onTaskFailure: () => { failed = true; },
@@ -176,7 +176,7 @@ Deno.test({
             ++endCount;
         };
 
-        let tm = new TaskManager<TaskBase>({
+        let tm = new TaskManager<TaskBase, void>({
             rateLimit: { count: 10, periodMS: 1000 },
             onRunTask,
         });
@@ -187,7 +187,7 @@ Deno.test({
         assertEquals(endCount, 0);
         tm.stop();
 
-        tm = TaskManager.deserialize<TaskBase>(tm.serialize(), { onRunTask });
+        tm = TaskManager.deserialize<TaskBase, void>(tm.serialize(), { onRunTask });
 
         // Task should be started a second time
         tm.start();
