@@ -42,7 +42,9 @@ Here's a brief description of the class's methods:
 * `stop(): void`: Halts task processing (note that in-flight tasks *will not* be canceled/stopped)
 * `start(): void`: Starts task processing, if it had been previously stopped
 * `serialize(): string`: Serializes the task queue to a string
+* `toParsedJson(): object`: Serializes the task queue to a JSON-friendly object (meaning it converts Date objects to strings that can be round-tripped through `JSON.stringify()` and `JSON.parse()`)
 
 Deserialization is done using:
 
 * `TaskManager.deserialize(json: string, options)`
+* `TaskManager.fromParsedJson(object, options)`

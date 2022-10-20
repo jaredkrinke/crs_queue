@@ -7,12 +7,7 @@ export interface RateLimit {
     periodMS: number;
 }
 
-interface RateLimiterJsonSource {
-    rate: RateLimit;
-    history: Date[];
-}
-
-interface RateLimiterJsonResult {
+interface RateLimiterJson {
     rate: RateLimit;
     history: string[];
 }
@@ -30,10 +25,14 @@ export class RateLimiter {
         this.history = history ?? [];
     }
 
+    /** Reconstructs a RateLimiter from parsed JSON. */
+    public static fromParsedJson(data: RateLimiterJson): RateLimiter {
+        return new RateLimiter(data.rate, data.history.map(s => new Date(s)));
+    }
+
     /** Deserializes a RateLimiter from a JSON string. */
     public static deserialize(json: string): RateLimiter {
-        const o = JSON.parse(json) as RateLimiterJsonResult;
-        return new RateLimiter(o.rate, o.history?.map(s => new Date(s)));
+        return RateLimiter.fromParsedJson(JSON.parse(json) as RateLimiterJson);
     }
 
     private addPeriod(date: Date): Date {
@@ -74,15 +73,20 @@ export class RateLimiter {
         this.rate = rate;
     }
 
-    /** Serializes the RateLimiter to a JSON string. */
-    public serialize(): string {
+    /** Saves the RateLimiter to a JSON-friendly object. */
+    public toParsedJson(): RateLimiterJson {
         this.update(RateLimiter.getNow());
-        const json: RateLimiterJsonSource = {
+        const json: RateLimiterJson = {
             rate: this.rate,
-            history: this.history,
+            history: this.history.map(d => d.toJSON()),
         };
 
-        return JSON.stringify(json);
+        return json;
+    }
+
+    /** Serializes the RateLimiter to a JSON string. */
+    public serialize(): string {
+        return JSON.stringify(this.toParsedJson());
     }
 }
 
@@ -133,13 +137,8 @@ export type TaskManagerState<TTask extends TaskBase> = {
     queue: TaskEntry<TTask>[];
 }
 
-type TaskManagerJsonSource<TTask extends { id: string }> = {
-    limiterJson: string;
-    queue: TaskEntry<TTask>[];
-};
-
-type TaskManagerJsonResult<TTask extends { id: string }> = {
-    limiterJson: string;
+type TaskManagerJson<TTask extends { id: string }> = {
+    limiter: RateLimiterJson;
     queue: TaskEntryJson<TTask>[];
 };
 
@@ -201,25 +200,29 @@ export class TaskManager<TTask extends TaskBase, TResult> {
         queue.splice(i, 0, taskEntry);
     }
 
-    private unscheduleCallback(): void {
-        if (this.callbackToken) {
-            clearTimeout(this.callbackToken);
-            this.callbackToken = undefined;
-        }
-    }
-
-    /** Deserializes a TaskManager from a JSON string, using the given options. */
-    public static deserialize<TTask extends TaskBase, TResult>(json: string, options: TaskManagerDeserializeOptions<TTask, TResult>): TaskManager<TTask, TResult> {
-        const o = JSON.parse(json) as TaskManagerJsonResult<TTask>;
-        const rateLimiter = RateLimiter.deserialize(o.limiterJson);
+    /** Reconstructs a TaskManager from parsed JSON, using the given options. */
+    public static fromParsedJson<TTask extends TaskBase, TResult>(data: TaskManagerJson<TTask>, options: TaskManagerDeserializeOptions<TTask, TResult>): TaskManager<TTask, TResult> {
+        const rateLimiter = RateLimiter.fromParsedJson(data.limiter);
         return new TaskManager<TTask, TResult>({
             rateLimit: options.rateLimit ?? rateLimiter.getRateLimit(),
             onRunTask: options.onRunTask,
             onTaskFailure: options.onTaskFailure,
         }, {
             rateLimiter,
-            queue: o.queue.map(e => ({ ...e, start: new Date(e.start) })),
+            queue: data.queue.map(e => ({ ...e, start: new Date(e.start) })),
         });
+    }
+
+    /** Deserializes a TaskManager from a JSON string, using the given options. */
+    public static deserialize<TTask extends TaskBase, TResult>(json: string, options: TaskManagerDeserializeOptions<TTask, TResult>): TaskManager<TTask, TResult> {
+        return TaskManager.fromParsedJson<TTask, TResult>(JSON.parse(json) as TaskManagerJson<TTask>, options);
+    }
+
+    private unscheduleCallback(): void {
+        if (this.callbackToken) {
+            clearTimeout(this.callbackToken);
+            this.callbackToken = undefined;
+        }
     }
 
     private drain(now: Date, triggeringTask?: TTask): Promise<TResult> | null {
@@ -301,19 +304,24 @@ export class TaskManager<TTask extends TaskBase, TResult> {
         this.unscheduleCallback();
     }
 
-    /** Serializes a TaskManager and its queued/running tasks to a JSON string. */
-    public serialize(): string {
+    /** Saves the TaskManager and its queued/running tasks to a JSON-friendly object. */
+    public toParsedJson(): TaskManagerJson<TTask> {
         // Merge running and queued tasks for serialization with queued tasks taking precedence (since they're newer)
         const queue = this.queue.slice();
         for (const task of this.running) {
             TaskManager.insertOrReplaceTaskInto<TTask>(queue, task, false);
         }
 
-        const json: TaskManagerJsonSource<TTask> = {
-            limiterJson: this.limiter.serialize(),
-            queue,
+        const json: TaskManagerJson<TTask> = {
+            limiter: this.limiter.toParsedJson(),
+            queue: queue.map(te => ({ task: te.task, start: te.start.toJSON() })),
         }
 
-        return JSON.stringify(json);
+        return json;
+    }
+
+    /** Serializes the TaskManager and its queued/running tasks to a JSON string. */
+    public serialize(): string {
+        return JSON.stringify(this.toParsedJson());
     }
 }
