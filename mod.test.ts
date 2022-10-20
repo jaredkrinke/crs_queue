@@ -160,11 +160,12 @@ Deno.test({
     name: "TaskManager failure handler",
     fn: async () => {
         let failed = false;
-        const promise = Promise.reject();
+        const message = "oops!";
+        const promise = Promise.reject(new Error(message));
         const tm = new TaskManager<TaskBase, void>({
             rateLimit: { count: 10, periodMS: 1000 },
             onRunTask: () => promise,
-            onTaskFailure: () => { failed = true; },
+            onTaskFailure: (_task, reason) => { failed = (!!reason && reason instanceof Error && reason.message === message); },
         });
 
         tm.run({ id: "a" });

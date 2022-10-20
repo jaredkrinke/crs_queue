@@ -111,7 +111,7 @@ export type TaskManagerOptions<TTask extends TaskBase, TResult> = {
     onRunTask: (task: TTask) => Promise<TResult>;
 
     /** Callback for handling failure of the given task (e.g. to schedule retries). */
-    onTaskFailure?: (task: TTask) => void;
+    onTaskFailure?: (task: TTask, reason?: Error | string) => void;
 }
 
 /** Options for deserializing a TaskManager. */
@@ -124,7 +124,7 @@ export type TaskManagerDeserializeOptions<TTask extends TaskBase, TResult> = {
     onRunTask: (task: TTask) => Promise<TResult>;
 
     /** Callback for handling failure of the given task (e.g. to schedule retries). */
-    onTaskFailure?: (task: TTask) => void;
+    onTaskFailure?: (task: TTask, reason?: Error | string) => void;
 }
 
 /** State for a TaskManager (used for deserializing a TaskManager). */
@@ -150,7 +150,7 @@ export class TaskManager<TTask extends TaskBase, TResult> {
     // Persistent state
     private readonly limiter: RateLimiter;
     private readonly onRunTask: (task: TTask) => Promise<TResult>;
-    private readonly onTaskFailure?: (task: TTask) => void;
+    private readonly onTaskFailure?: (task: TTask, reason?: Error | string) => void;
     private readonly queue: TaskEntry<TTask>[];
 
     // Transient state
@@ -224,7 +224,7 @@ export class TaskManager<TTask extends TaskBase, TResult> {
 
     private drain(now: Date, triggeringTask?: TTask): Promise<TResult> | null {
         if (this.stopped) {
-            throw new Error("Attempted to run TaskManager while it was stopped!");
+            return null;
         }
 
         let promiseOrNull: Promise<TResult> | null = null;
@@ -246,12 +246,12 @@ export class TaskManager<TTask extends TaskBase, TResult> {
                         if (!this.stopped) {
                             this.running.splice(this.running.indexOf(task), 1);
                         }
-                    }).catch(() => {
+                    }).catch((reason) => {
                         // Task failed
                         if (!this.stopped) {
                             this.running.splice(this.running.indexOf(task), 1);
                             if (this.onTaskFailure) {
-                                this.onTaskFailure(task);
+                                this.onTaskFailure(task, (reason instanceof Error || typeof(reason) === "string") ? reason : undefined);
                             }
                         }
                     });
