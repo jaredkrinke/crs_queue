@@ -273,3 +273,83 @@ Deno.test({
         assertEquals(outstandingTasks.length, 0);
     },
 });
+
+type RetryableTask = TaskBase & { retryCount: number };
+
+Deno.test({
+    name: "TaskManager retry scheduling",
+    fn: async () => {
+        const tasksExecuted: string[] = [];
+        // const promises: Promise<void>[] = [];
+        const rateLimit = { count: 2, periodMS: 5000 };
+        const retryIntervals = [
+            10 * 1000,
+            60 * 1000,
+        ];
+
+        let tm: TaskManager<RetryableTask, void>;
+
+        const onRunTask = (t: RetryableTask) => {
+            tasksExecuted.push(t.id);
+            const p = Promise.reject();
+            // promises.push(p);
+            return p;
+        };
+
+        const onTaskFailure = (t: RetryableTask) => {
+            // Reschedule tasks on failure
+            if (t.retryCount < retryIntervals.length) {
+                tm.run({ ...t, retryCount: t.retryCount + 1 }, later(now, retryIntervals[t.retryCount]));
+            }
+        };
+
+        tm = new TaskManager<RetryableTask, void>({ rateLimit, onRunTask, onTaskFailure });
+
+        function runTask(s: string) {
+            const t = { id: s, retryCount: 0, start: now };
+            return tm.run(t);
+        }
+
+        runTask("a");
+        runTask("b")!;
+        runTask("c");
+
+        await wait(1);
+
+        // a and b should have run, but not c
+        assertEquals(tasksExecuted, ["a", "b"]);
+        tasksExecuted.length = 0;
+        // promises.length = 0;
+        tm.stop();
+        now = later(now, 5001);
+        tm.start();
+        await wait(1);
+
+        // c should run
+        assertEquals(tasksExecuted, ["c"]);
+        tasksExecuted.length = 0;
+
+        // a and b should run again
+        tm.stop();
+        now = later(now, 5001);
+        tm.start();
+        await wait(1);
+        assertEquals(tasksExecuted, ["a", "b"]);
+        tasksExecuted.length = 0;
+        tm.stop();
+
+        // Round-trip through JSON, then c should run
+        now = later(now, 5001);
+        tm = TaskManager.deserialize<RetryableTask, void>(tm.serialize(), { onRunTask, onTaskFailure });
+        assertEquals(tasksExecuted, ["c"]);
+        tasksExecuted.length = 0;
+        tm.stop();
+
+        // Wait for retry of a, b
+        now = later(now, 55001);
+        tm.start();
+        assertEquals(tasksExecuted, ["a", "b"]);
+        tasksExecuted.length = 0;
+        tm.stop();
+    },
+});

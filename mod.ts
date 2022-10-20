@@ -243,16 +243,12 @@ export class TaskManager<TTask extends TaskBase, TResult> {
                     const promise = this.onRunTask(task);
                     promise.then(() => {
                         // Task completed
-                        if (!this.stopped) {
-                            this.running.splice(this.running.indexOf(task), 1);
-                        }
+                        this.running.splice(this.running.indexOf(task), 1);
                     }).catch((reason) => {
                         // Task failed
-                        if (!this.stopped) {
-                            this.running.splice(this.running.indexOf(task), 1);
-                            if (this.onTaskFailure) {
-                                this.onTaskFailure(task, (reason instanceof Error || typeof(reason) === "string") ? reason : undefined);
-                            }
+                        this.running.splice(this.running.indexOf(task), 1);
+                        if (this.onTaskFailure) {
+                            this.onTaskFailure(task, (reason instanceof Error || typeof(reason) === "string") ? reason : undefined);
                         }
                     });
     
