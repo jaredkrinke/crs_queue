@@ -7,7 +7,7 @@ export interface RateLimit {
     periodMS: number;
 }
 
-interface RateLimiterJson {
+export interface RateLimiterJson {
     rate: RateLimit;
     history: string[];
 }
@@ -101,7 +101,7 @@ type TaskEntry<TTask extends TaskBase> = {
     start: Date;
 };
 
-type TaskEntryJson<TTask extends TaskBase> = {
+export type TaskEntryJson<TTask extends TaskBase> = {
     task: TTask;
     start: string;
 };
@@ -137,7 +137,7 @@ export type TaskManagerState<TTask extends TaskBase> = {
     queue: TaskEntry<TTask>[];
 }
 
-type TaskManagerJson<TTask extends { id: string }> = {
+export type TaskManagerJson<TTask extends { id: string }> = {
     limiter: RateLimiterJson;
     queue: TaskEntryJson<TTask>[];
 };
