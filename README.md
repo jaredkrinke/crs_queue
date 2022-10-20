@@ -6,6 +6,7 @@
 * Tasks with the same (string) identity are coalesced (using "last writer wins" for task data)
 * Requests are limited according to a user-specified rate
 * The entire queue (including tasks, data, history) can be serialized/deserialized (e.g. to localStorage)
+* Tasks can be delayed/scheduled for the future
 
 Note that this library does not *guarantee* that requests won't be issued more than once. For example, if the queue is serialized while a request is in flight, that request can later be run a second time if the queue is deserialized and restarted.
 

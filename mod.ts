@@ -92,6 +92,16 @@ export type TaskBase = {
     id: string,
 };
 
+type TaskEntry<TTask extends TaskBase> = {
+    task: TTask;
+    start: Date;
+};
+
+type TaskEntryJson<TTask extends TaskBase> = {
+    task: TTask;
+    start: string;
+};
+
 /** Options for creating TaskManager. */
 export type TaskManagerOptions<TTask extends TaskBase, TResult> = {
     /** Rate limit for running tasks. */
@@ -120,12 +130,17 @@ export type TaskManagerDeserializeOptions<TTask extends TaskBase, TResult> = {
 /** State for a TaskManager (used for deserializing a TaskManager). */
 export type TaskManagerState<TTask extends TaskBase> = {
     rateLimiter: RateLimiter;
-    queue: TTask[];
+    queue: TaskEntry<TTask>[];
 }
 
-type TaskManagerJson<TTask extends { id: string }> = {
+type TaskManagerJsonSource<TTask extends { id: string }> = {
     limiterJson: string;
-    queue: TTask[];
+    queue: TaskEntry<TTask>[];
+};
+
+type TaskManagerJsonResult<TTask extends { id: string }> = {
+    limiterJson: string;
+    queue: TaskEntryJson<TTask>[];
 };
 
 /** A coalescing, rate-limited, serializable/deserializable task manager. */
@@ -136,7 +151,7 @@ export class TaskManager<TTask extends TaskBase, TResult> {
     private readonly limiter: RateLimiter;
     private readonly onRunTask: (task: TTask) => Promise<TResult>;
     private readonly onTaskFailure?: (task: TTask) => void;
-    private readonly queue: TTask[];
+    private readonly queue: TaskEntry<TTask>[];
 
     // Transient state
     private stopped: boolean;
@@ -159,23 +174,43 @@ export class TaskManager<TTask extends TaskBase, TResult> {
         this.queue = (state?.queue) ?? [];
         this.stopped = false;
         this.running = [];
+
+        this.drain(TaskManager.getNow());
     }
 
-    private static insertOrReplaceTaskInto<TTask extends TaskBase>(queue: TTask[], task: TTask, replace: boolean): void {
-        const existingIndex = queue.findIndex(t => t.id === task.id);
+    private static insertOrReplaceTaskInto<TTask extends TaskBase>(queue: TaskEntry<TTask>[], task: TTask, replace: boolean, earliestStartTime?: Date): void {
+        // Remove any existing task with the same id, if needed
+        const existingIndex = queue.findIndex(t => t.task.id === task.id);
         if (existingIndex >= 0) {
-            // Task with same id already exists in queue; replace or drop as requested
             if (replace) {
-                queue.splice(existingIndex, 1, task);
+                queue.splice(existingIndex, 1);
+            } else {
+                // Not replacing and already exists; all done
+                return;
             }
-        } else {
-            queue.push(task);
+        }
+
+        const start = earliestStartTime ?? TaskManager.getNow();
+        const taskEntry: TaskEntry<TTask> = { task, start };
+
+        // Insert, sorted by start time
+        let i = 0;
+        while (i < queue.length && queue[i].start <= start) {
+            ++i;
+        }
+        queue.splice(i, 0, taskEntry);
+    }
+
+    private unscheduleCallback(): void {
+        if (this.callbackToken) {
+            clearTimeout(this.callbackToken);
+            this.callbackToken = undefined;
         }
     }
 
     /** Deserializes a TaskManager from a JSON string, using the given options. */
     public static deserialize<TTask extends TaskBase, TResult>(json: string, options: TaskManagerDeserializeOptions<TTask, TResult>): TaskManager<TTask, TResult> {
-        const o = JSON.parse(json) as TaskManagerJson<TTask>;
+        const o = JSON.parse(json) as TaskManagerJsonResult<TTask>;
         const rateLimiter = RateLimiter.deserialize(o.limiterJson);
         return new TaskManager<TTask, TResult>({
             rateLimit: options.rateLimit ?? rateLimiter.getRateLimit(),
@@ -183,7 +218,7 @@ export class TaskManager<TTask extends TaskBase, TResult> {
             onTaskFailure: options.onTaskFailure,
         }, {
             rateLimiter,
-            queue: o.queue,
+            queue: o.queue.map(e => ({ ...e, start: new Date(e.start) })),
         });
     }
 
@@ -192,46 +227,56 @@ export class TaskManager<TTask extends TaskBase, TResult> {
             throw new Error("Attempted to run TaskManager while it was stopped!");
         }
 
-        if (this.callbackToken !== undefined) {
-            // Timer is already scheduled
-            return null;
-        }
-
         let promiseOrNull: Promise<TResult> | null = null;
+        let nextRunTime: Date | undefined;
         while (this.queue.length > 0) {
-            const result = this.limiter.tryRequest();
-            if (result === true) {
-                // Under the rate limit; run the task
-                const task = this.queue.shift()!;
-                this.running.push(task);
-
-                const promise = this.onRunTask(task);
-                promise.then(() => {
-                    // Task completed
-                    if (!this.stopped) {
-                        this.running.splice(this.running.indexOf(task), 1);
-                    }
-                }).catch(() => {
-                    // Task failed
-                    if (!this.stopped) {
-                        this.running.splice(this.running.indexOf(task), 1);
-                        if (this.onTaskFailure) {
-                            this.onTaskFailure(task);
+            // Peek at the next task's start time
+            const { start } = this.queue[0];
+            if (start <= now) {
+                // Task can be run; see if allowed by the rate limit
+                const result = this.limiter.tryRequest();
+                if (result === true) {
+                    // Under the rate limit; run it
+                    const { task } = this.queue.shift()!;
+                    this.running.push(task);
+    
+                    const promise = this.onRunTask(task);
+                    promise.then(() => {
+                        // Task completed
+                        if (!this.stopped) {
+                            this.running.splice(this.running.indexOf(task), 1);
                         }
+                    }).catch(() => {
+                        // Task failed
+                        if (!this.stopped) {
+                            this.running.splice(this.running.indexOf(task), 1);
+                            if (this.onTaskFailure) {
+                                this.onTaskFailure(task);
+                            }
+                        }
+                    });
+    
+                    // Check to see if this was the triggering task; if so, this promise should be returned
+                    if (task.id === triggeringTask?.id) {
+                        promiseOrNull = promise;
                     }
-                });
-
-                // Check to see if this was the triggering task; if so, this promise should be returned
-                if (task.id === triggeringTask?.id) {
-                    promiseOrNull = promise;
+                } else {
+                    // Over the rate limit; schedule a timer
+                    nextRunTime = result as Date;
                 }
             } else {
-                // Over the rate limit; schedule a timer
-                const nextRunTime = result as Date;
+                // It's not yet time for this task; schedule a timer
+                nextRunTime = start;
+            }
+
+            if (nextRunTime !== undefined) {
+                // Need to schedule a timer for the next task; do so and then break out of the loop
+                this.unscheduleCallback();
                 this.callbackToken = setTimeout(() => {
                     this.callbackToken = undefined;
                     this.drain(TaskManager.getNow());
                 }, nextRunTime.valueOf() - now.valueOf());
+
                 break;
             }
         }
@@ -239,21 +284,17 @@ export class TaskManager<TTask extends TaskBase, TResult> {
         return promiseOrNull;
     }
 
-    private insertOrReplaceTask(task: TTask, replace: boolean): void {
-        TaskManager.insertOrReplaceTaskInto<TTask>(this.queue, task, replace);
-    }
-
-    /** Starts executing tasks. */
+    /** Starts executing tasks, if previously stopped. */
     public start(): void {
         const now = TaskManager.getNow();
         this.stopped = false;
         this.drain(now);
     }
 
-    /** Adds (and attempts to run, if possible) a task. */
-    public run(task: TTask): Promise<TResult> | null {
+    /** Adds (and attempts to run, if possible) a task. Tasks can be scheduled for the future by providing earliestStartTime. */
+    public run(task: TTask, earliestStartTime?: Date): Promise<TResult> | null {
         const now = TaskManager.getNow();
-        this.insertOrReplaceTask(task, true);
+        TaskManager.insertOrReplaceTaskInto<TTask>(this.queue, task, true, earliestStartTime);
         return this.drain(now, task);
     }
 
@@ -261,10 +302,7 @@ export class TaskManager<TTask extends TaskBase, TResult> {
      * queued tasks. */
     public stop(): void {
         this.stopped = true;
-        if (this.callbackToken) {
-            clearTimeout(this.callbackToken);
-            this.callbackToken = undefined;
-        }
+        this.unscheduleCallback();
     }
 
     /** Serializes a TaskManager and its queued/running tasks to a JSON string. */
@@ -275,7 +313,7 @@ export class TaskManager<TTask extends TaskBase, TResult> {
             TaskManager.insertOrReplaceTaskInto<TTask>(queue, task, false);
         }
 
-        const json: TaskManagerJson<TTask> = {
+        const json: TaskManagerJsonSource<TTask> = {
             limiterJson: this.limiter.serialize(),
             queue,
         }

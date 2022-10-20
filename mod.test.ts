@@ -214,3 +214,61 @@ Deno.test({
         assertEquals(endCount, 2);
     },
 });
+
+Deno.test({
+    name: "TaskManager scheduling",
+    fn: async () => {
+        const outstandingTasks: TaskBase[] = [];
+        const rateLimit = { count: 3, periodMS: 1000 };
+        const onRunTask = (t: TaskBase) => {
+            outstandingTasks.splice(outstandingTasks.indexOf(t), 1);
+            return Promise.resolve(t.id);
+        };
+
+        let tm = new TaskManager<TaskBase, string>({ rateLimit, onRunTask });
+
+        function runTask(s: string, d?: Date) {
+            const t = { id: s};
+            outstandingTasks.push(t);
+            return tm.run(t, d);
+        }
+
+        runTask("a");
+        assertEquals(runTask("b", later(now, 2000)), null);
+        runTask("c");
+        const promiseD = runTask("d");
+        runTask("e");
+
+        // a, c, d should have run
+        assertEquals(outstandingTasks.length, 2);
+        assertEquals(outstandingTasks.findIndex(t => t.id === "b"), 0);
+        assertEquals(outstandingTasks.findIndex(t => t.id === "e"), 1);
+
+        // Round-trip through JSON
+        assertEquals(await promiseD, "d");
+        tm.stop();
+        tm = TaskManager.deserialize<TaskBase, string>(tm.serialize(), { onRunTask });
+        tm.start();
+
+        assertEquals(outstandingTasks.length, 2);
+        assertEquals(outstandingTasks.findIndex(t => t.id === "b"), 0);
+        assertEquals(outstandingTasks.findIndex(t => t.id === "e"), 1);
+
+        // Advance time
+        tm.stop();
+        now = later(now, 1000 + 1);
+        tm.start();
+
+        // e should have run
+        assertEquals(outstandingTasks.length, 1);
+        assertEquals(outstandingTasks.findIndex(t => t.id === "b"), 0);
+
+        // Advance time again
+        tm.stop();
+        now = later(now, 1000 + 1);
+        tm.start();
+
+        // All should be done now
+        assertEquals(outstandingTasks.length, 0);
+    },
+});
